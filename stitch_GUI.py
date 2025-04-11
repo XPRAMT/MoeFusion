@@ -49,6 +49,9 @@ class StitchWidget(QtWidgets.QWidget):
         self.UseWaifu2xSlider.valueChanged.connect(self._updateSettings)
         settinglayout.addWidget(self.UseWaifu2xLabel)
         settinglayout.addWidget(self.UseWaifu2xSlider)
+        # 透視
+        self.perspectiveChk = QtWidgets.QCheckBox("Use perspective")
+        settinglayout.addWidget(self.perspectiveChk)
         # # #
         params_layout.addLayout(settinglayout)
         layout.addWidget(params_group)
@@ -101,6 +104,7 @@ class StitchWidget(QtWidgets.QWidget):
         self.Stitcher.OverlapSize = self.OverlapSizeSlider.value()/100
         self.Stitcher.waifu2x = self.waifu2x_instance
         self.Stitcher.useWaifu2x = self.UseWaifu2xSlider.value()/10
+        self.Stitcher.perspective = self.perspectiveChk.isChecked()
         
         self.thread = QtCore.QThread()
         self.Stitcher.moveToThread(self.thread)
@@ -137,7 +141,8 @@ class StitchWidget(QtWidgets.QWidget):
         params = {
             "similarity": self.similarSlider.value()/100,
             "OverlapSize": self.OverlapSizeSlider.value()/100,
-            "UseWaifu2x" : self.UseWaifu2xSlider.value()/10
+            "UseWaifu2x": self.UseWaifu2xSlider.value()/10,
+            "Perspective":self.perspectiveChk.isChecked()
         }
         config_data = utils.config_file()
         config_data["stitch"] = params
@@ -151,6 +156,7 @@ class StitchWidget(QtWidgets.QWidget):
             self.similarSlider.setValue(int(params.get("similarity", 0.5)*100))
             self.OverlapSizeSlider.setValue(int(params.get("OverlapSize", 0.5)*100))
             self.UseWaifu2xSlider.setValue(int(params.get("UseWaifu2x", 1)*10))
+            self.perspectiveChk.setChecked(params.get("Perspective", False))
             utils.toMainGUI.put([0,"[parameters] Stitch loaded."])
         else:
             utils.toMainGUI.put([0,"[parameters] Not found stitch."])
@@ -170,6 +176,7 @@ class ImageStitcher(QtCore.QObject):
         self.OverlapSize = 0
         self.waifu2x = None
         self.useWaifu2x = 1
+        self.perspective = True
         # 內部
         self.detector = cv2.SIFT_create(nfeatures=2000)
         self.best = None
@@ -262,23 +269,26 @@ class ImageStitcher(QtCore.QObject):
         src_pts = np.float32([kpT[m.queryIdx].pt for m in matches])
         dst_pts = np.float32([kpB[m.trainIdx].pt for m in matches])
 
-        # 使用 cv2.estimateAffinePartial2D 計算仿射矩陣，僅估算旋轉、縮放和平移
-        #affine_matrix, inliers = cv2.estimateAffinePartial2D(src_pts, dst_pts, method=cv2.RANSAC)
-        affine_matrix, inliers = cv2.estimateAffine2D(src_pts, dst_pts, method=cv2.RANSAC)
+        if self.perspective:
+            matrix, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0) #透視
+        else:
+            # 使用 cv2.estimateAffinePartial2D 計算仿射矩陣，僅估算旋轉、縮放和平移
+            matrix_2x3, inliers = cv2.estimateAffine2D(src_pts, dst_pts, cv2.RANSAC)
+            matrix = np.vstack([matrix_2x3, [0, 0, 1]])
 
-        #H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0) #透視
-        
-        if affine_matrix is None:
-            self._log("[變換矩陣] 無法計算仿射轉換矩陣")
+        if matrix is None:
+            self._log("[變換矩陣] 無法計算轉換矩陣")
             return None,None
 
         # 根據 H 計算縮放因子
-        scale_factor = np.sqrt(np.abs(np.linalg.det(affine_matrix[:, :2])))
+        #scale_factor = np.sqrt(np.abs(np.linalg.det(matrix[:, :2])))
+        scale_factor = np.sqrt(np.abs(np.linalg.det(matrix[0:2, 0:2])))
+
         if scale_factor>0:
             self._log(f"[變換矩陣] 縮放比例: {scale_factor:.3f}")
         else:
             self._log(f"[變換矩陣] 縮放比例: {scale_factor:.3f} 錯誤")
-        return affine_matrix,scale_factor
+        return matrix,scale_factor
 
     def _resize(self,img,scale_factor):
         'img_dict, scale_factor'
@@ -382,19 +392,25 @@ class ImageStitcher(QtCore.QObject):
         # 返回最終拼接結果
         return result
 
-    def _warp_and_merge(self, imgB, imgT, affine_matrix, scale_T):
+    def _warp_and_merge(self, imgB, imgT, matrix, scale_T):
         
         if scale_T < 1:
             self._log(f'[拼接] 放大底圖 {1 / scale_T:.2f} 倍')
             imgB = self._resize(imgB, 1 / scale_T)
             imgT = imgT['raw']
-            affine_matrix = affine_matrix.copy() / scale_T # 調整仿射矩陣
+            #matrix = matrix.copy() / scale_T # 調整仿射矩陣
+            # 放大底圖：前乘一個縮放矩陣 (1/scale_T)
+            S_base = np.diag([1/scale_T, 1/scale_T, 1])
+            matrix = S_base @ matrix
         else:
             self._log(f'[拼接] 放大頂圖 {scale_T:.2f} 倍')
             imgT = self._resize(imgT, scale_T)
             imgB = imgB['raw']
-            affine_matrix[:, :2] = affine_matrix.copy()[:, :2] / scale_T
-        
+            #matrix[:, :2] = matrix.copy()[:, :2] / scale_T
+            # 放大頂圖：後乘一個縮放矩陣 (1/scale_T)
+            S_top_inv = np.diag([1/scale_T, 1/scale_T, 1])
+            matrix = matrix @ S_top_inv
+            
         if imgB is None or imgT is None:
             return None
         # 計算兩張圖像的尺寸與角點位置
@@ -402,8 +418,8 @@ class ImageStitcher(QtCore.QObject):
         hT, wT = imgT.shape[:2]
         # 取得 top 圖像 (imgT) 的四個角點，並以浮點數型態儲存
         corners_imgT = np.float32([[0, 0], [wT, 0], [wT, hT], [0, hT]]).reshape(-1, 1, 2)
-        # 以 affine_matrix 對 top 圖像角點進行幾何變換 (旋轉、平移)
-        transformed_corners = cv2.transform(corners_imgT, affine_matrix)
+        # 以 matrix 對 top 圖像角點進行幾何變換 (旋轉、平移)
+        transformed_corners = cv2.perspectiveTransform(corners_imgT, matrix)
         # 取得 base 圖像 (imgB) 的四個角點，預設位於原點位置
         corners_imgB = np.float32([[0, 0], [wB, 0], [wB, hB], [0, hB]]).reshape(-1, 1, 2)
         # 合併兩組角點以計算整體輸出畫布的範圍
@@ -411,33 +427,34 @@ class ImageStitcher(QtCore.QObject):
         # 取得 x、y 最小與最大值，並略微擴充 (0.5 像素)
         [xmin, ymin] = np.int32(all_corners.min(axis=0).ravel() - 0.5)
         [xmax, ymax] = np.int32(all_corners.max(axis=0).ravel() + 0.5)
+        # 計算最終畫布尺寸
+        canvas_size = (xmax - xmin, ymax - ymin)
         self._log(f"[拼接] 整體畫布範圍：xmin={xmin}, ymin={ymin}, xmax={xmax}, ymax={ymax}")
+
         # 建立平移矩陣並調整 affine_matrix 使所有像素位於正坐標系統中
         # 計算平移量：使最小座標為 (0, 0)
         translation = [-xmin, -ymin]
-        # 建立 2x3 平移矩陣
-        T = np.array([
-            [1, 0, translation[0]],
-            [0, 1, translation[1]]
-        ], dtype=np.float32)
-        # 將 affine_matrix 轉換為 3x3 同時合併平移矩陣：
-        # 先把 2x3 affine_matrix 轉換為 3x3 矩陣 (補上 [0, 0, 1])
-        M_hom = np.vstack([affine_matrix, [0, 0, 1]])
+
         # 同理建立 3x3 的平移矩陣
         T_hom = np.array([
-            [1, 0, translation[0]],
+            [1, 0, translation[0]], 
             [0, 1, translation[1]],
             [0, 0, 1]
         ], dtype=np.float32)
-        # 合併後得到新的變換矩陣
-        new_M = T_hom @ M_hom  # 3x3 矩陣
-        # 取回 2x3 的 affine_matrix
-        affine_matrix_new = new_M[0:2, :]
-        # 計算最終畫布尺寸
-        canvas_size = (xmax - xmin, ymax - ymin)
-        # 使用 cv2.warpAffine() 進行頂圖的幾何變換 (旋轉、平移)
-        warped_imgT = cv2.warpAffine(imgT, affine_matrix_new, canvas_size, flags=cv2.INTER_CUBIC,
-            borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+
+        # 合併平移矩陣與原始矩陣，得到新的 3x3 變換矩陣
+        new_M = T_hom @ matrix
+
+        if self.perspective: #透視
+            warped_imgT = cv2.warpPerspective(imgT, new_M, canvas_size, flags=cv2.INTER_CUBIC,
+                        borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+        else:
+            # 取回 2x3 的 affine_matrix
+            matrix_2x3 = new_M[0:2, :]
+            # 使用 cv2.warpAffine() 進行頂圖的幾何變換 (旋轉、平移)
+            warped_imgT = cv2.warpAffine(imgT, matrix_2x3, canvas_size, flags=cv2.INTER_CUBIC,
+                        borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+        
         # 為 warped 建立 alpha 掩膜，定位圖像中有效（不透明）區域
         warped_mask = (warped_imgT[..., 3] > 0).astype(np.uint8)
         # 建立與畫布同大小的空白圖，將 base 圖像置於正確位置 (依據平移量)

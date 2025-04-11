@@ -104,7 +104,7 @@ class MainWindow(QtWidgets.QWidget):
         outputPath_layout.addWidget(self.selectOutputButton)
         setting_layout.addLayout(outputPath_layout)
         # Debug 模式
-        self.chk_debug = QtWidgets.QCheckBox("Enable Debug Mode")
+        self.chk_debug = QtWidgets.QCheckBox("Debug mode")
         self.chk_debug.checkStateChanged.connect(self.change_parameter)
         setting_layout.addWidget(self.chk_debug)
         # 添加到左側功能區
