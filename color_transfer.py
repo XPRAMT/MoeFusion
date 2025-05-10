@@ -31,10 +31,8 @@ class TransferWidget(QtWidgets.QWidget):
         layout.addWidget(btn_select_ref)
 
         # 顯示參考圖片
-        self.label_ref = QtWidgets.QLabel("")
-        self.label_ref.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
-        self.label_ref.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
-                                      QtWidgets.QSizePolicy.Policy.Ignored)
+        self.label_ref = QtWidgets.QLabel(alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        #self.label_ref.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self.label_ref)
         
         # 儲存、讀取
@@ -163,26 +161,10 @@ class ColorTransfer(QtCore.QObject):
         if utils.debug:
             utils.toMainGUI.put([0, f"[transfer]{msg}"])
 
-    def _read(self, path):
-        try:
-            # 以二進位方式讀取檔案，適用於中文路徑
-            data = np.fromfile(path, dtype=np.uint8)
-            img = cv2.imdecode(data, cv2.IMREAD_UNCHANGED)
-            if img is None:
-                self._log(f"[讀取失敗] {os.path.basename(path)} 無法解碼")
-                return None
-            
-            imgName = os.path.basename(path)
-            self._log(f"[讀取圖片] 大小: {img.shape} | {imgName}")
-            return img
-        except Exception as e:
-            self._log(f"[讀取圖片例外] {path}\n{e}")
-            return None
-
     def run(self):
 
         if self.targetPath:
-            self.ref_img = self._read(self.targetPath)
+            self.ref_img = utils.read_img(self.targetPath,True)
             if self.ref_img is None:
                 return
         
@@ -192,9 +174,12 @@ class ColorTransfer(QtCore.QObject):
             utils.image_queue[img_path] = 1 #處理中
             utils.toMainGUI.put([2, '更新table'])
             state_code = 2
-            img = self._read(img_path)
+            img = utils.read_img(img_path)
             if img is not None:
-                result_img = self.match_color(img,self.ref_img)
+                Exif = img.info.get("exif")
+                arr = np.array(img, dtype=np.uint8)
+                arr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGRA)
+                result_img = self.match_color(arr,self.ref_img)
 
                 current_folder = os.path.dirname(img_path)
                 basename = os.path.splitext(os.path.basename(img_path))[0]
@@ -208,7 +193,7 @@ class ColorTransfer(QtCore.QObject):
                 else:
                     folderPath = current_folder
                 
-                if not utils.save_img(result_img,folderPath,f'{basename}_fix'):
+                if not utils.save_img(result_img,folderPath,f'{basename}_fix',Exif):
                     state_code = 3
             else:
                 state_code = 3

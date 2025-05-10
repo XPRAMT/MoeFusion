@@ -33,7 +33,6 @@ class waifu2xComposite(QtCore.QThread):
             self.input_low = params.get("range_low", 10)
             self.input_high = params.get("range_high", 240)
             # 內部產生
-            self.input_range = (self.input_low, self.input_high )
             self.base_name = ''
             self.executor = ThreadPoolExecutor(max_workers=8) 
             self._log(' 初始化完成')
@@ -127,6 +126,7 @@ class waifu2xComposite(QtCore.QThread):
 
     def run(self):
         '返回CV2圖片'
+        self.input_range = (self.input_low, self.input_high )
         if self.image_path:
             self.base_name = os.path.splitext(os.path.basename(self.image_path))[0]
         self._log(f" Scale: {self.scale}, Top Model: {self.top_model}, Gamma: {self.gamma}, Input Range: {self.input_range}, Blur Radius: {self.blur_factor}")

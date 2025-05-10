@@ -1,10 +1,12 @@
-import sys, os
-import utils
-import waifu2x_Composite_GUI
-import stitch_GUI
-import color_transfer
+import sys,os,ctypes
 from PyQt6 import QtWidgets, QtGui, QtCore
 from waifu2x_vulkan import waifu2x
+import utils
+import waifu2x_Composite_GUI
+import stitch
+import color_transfer
+import base_operate
+ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('xpramt.moefusion')
 
 class HandleReturnMessages(QtCore.QThread):
     ReturnMeg = QtCore.pyqtSignal(object,object)
@@ -18,7 +20,7 @@ class MainWindow(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MoeFusion v1.0")
-        self.setWindowIcon(QtGui.QIcon('C:/APP/@develop/audio-channel-mapping/icon.ico'))
+        self.setWindowIcon(QtGui.QIcon("C:\APP\@develop\MoeFusion\icon.ico"))
         # 啟用拖曳
         self.setAcceptDrops(True)
         self.current_widget = None
@@ -73,7 +75,7 @@ class MainWindow(QtWidgets.QWidget):
         combo_functionLabel = QtWidgets.QLabel("Select Function: ")
         SelectFunc_layout.addWidget(combo_functionLabel)
         self.combo_function = QtWidgets.QComboBox()
-        self.combo_function.addItems(["waifu2x","stitch","transfer"])
+        self.combo_function.addItems(["waifu2x","stitch","transfer","base"])
         self.combo_function.currentIndexChanged.connect(self.change_function)
         SelectFunc_layout.addWidget(self.combo_function)
         setting_layout.addLayout(SelectFunc_layout)
@@ -82,7 +84,7 @@ class MainWindow(QtWidgets.QWidget):
         Format_layout = QtWidgets.QHBoxLayout()
         Format_layout.addWidget(QtWidgets.QLabel("Output Format:"))
         self.combo_format = QtWidgets.QComboBox()
-        self.combo_format.addItems(["jpg","heic","png"])
+        self.combo_format.addItems(["AVIF","HEIF","JPG","PNG"])
         self.combo_format.currentIndexChanged.connect(self.change_parameter)
         Format_layout.addWidget(self.combo_format)
         self.lbl_quality = QtWidgets.QLabel("Quality:")
@@ -152,18 +154,21 @@ class MainWindow(QtWidgets.QWidget):
         # 右側功能區
         right_layout = QtWidgets.QVBoxLayout()
         right_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignHCenter)
+        #right_layout.setSizeConstraint(QtWidgets.QLayout.SizeConstraint.SetMaximumSize)
         # 利用 QStackedWidget 放置各功能的 Widget
         self.stacked_widget = QtWidgets.QStackedWidget()
         self.stacked_widget.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Maximum)
         # 注意：在建立功能 Widget 時，明確指定 parent 與額外參數
         waifu2x_widget = waifu2x_Composite_GUI.Waifu2xCompositeWidget(parent=self)
         waifu2x_widget.waifu2x_instance = self.waifu2x_instance
-        stitch_widget = stitch_GUI.StitchWidget(parent=self)
+        stitch_widget = stitch.StitchWidget(parent=self)
         stitch_widget.waifu2x_instance = self.waifu2x_instance
         transfer_widget = color_transfer.TransferWidget(parent=self)
+        base_widget = base_operate.BaseOperateWidget(parent=self)
         self.stacked_widget.addWidget(waifu2x_widget)
         self.stacked_widget.addWidget(stitch_widget)
         self.stacked_widget.addWidget(transfer_widget)
+        self.stacked_widget.addWidget(base_widget)
         self.current_widget = self.stacked_widget.currentWidget()
         right_layout.addWidget(self.stacked_widget)
         # 開始按鈕
@@ -191,10 +196,12 @@ class MainWindow(QtWidgets.QWidget):
     def change_function(self, index):
         self.stacked_widget.setCurrentIndex(index)
         self.current_widget = self.stacked_widget.currentWidget()
+        self.stacked_widget.setMinimumWidth(300)
+        self.stacked_widget.setMaximumHeight(self.current_widget.sizeHint().height())
 
     def change_parameter(self):
         utils.format = self.combo_format.currentText()
-        if utils.format.lower() != "png":
+        if utils.format != "PNG":
             self.lbl_quality.show()
             self.spin_quality.show()
         else:
@@ -239,7 +246,7 @@ class MainWindow(QtWidgets.QWidget):
     def dropEvent(self, event):
         for url in event.mimeData().urls():
             file_path = url.toLocalFile()
-            if os.path.isfile(file_path) and file_path.lower().endswith(('.jpg', '.png', '.webp')):
+            if os.path.isfile(file_path) and file_path.lower().endswith((".jpg", ".jpeg", ".png", ".webp" ,".heic" ,".hif")):
                 if file_path not in utils.image_queue:
                     utils.image_queue[file_path] = 0
         self.update_table()
@@ -264,7 +271,7 @@ class MainWindow(QtWidgets.QWidget):
 
     def select_file(self):
         files, _ = QtWidgets.QFileDialog.getOpenFileNames(
-            self, "Select Images", "", "Image Files (*.jpg *.jpeg *.png *.webp *.heic #.hif)"
+            self, "Select Images", "", "Image Files (*.jpg *.jpeg *.png *.webp *.heic *.hif)"
         )
         if files:
             for file in files:

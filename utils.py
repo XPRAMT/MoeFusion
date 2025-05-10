@@ -2,15 +2,17 @@ import json,os,queue
 import cv2
 import numpy as np
 from PIL import Image, ImageFilter
+import pillow_avif
 import pillow_heif
 pillow_heif.register_heif_opener()
+import piexif
 
 image_queue = {}
 fromeFolder = {}
 isRunning = False
 toMainGUI = queue.Queue()
 
-format = 'jpg'
+format = 'JPG'
 quality = 100
 debug = False
 outputFolder = ""
@@ -35,9 +37,34 @@ def config_file(save_config=None):
     else:
         Save(save_config)
 
-def save_img(img,folderPath,basename):
-    '圖片,路徑'
+def read_img(path, ReCv2=False):
+    """
+    讀取圖片，預設返回 PIL Image\n
+    若 cv2=True，回傳 OpenCV BGR numpy.ndarray\n
+    失敗時回傳 None
+    """
     try:
+        img = Image.open(path)
+        toMainGUI.put([0, f"[讀取圖片] 讀取 {os.path.basename(path)} 成功 | {img.format} {img.mode}"])
+    except Exception as e:
+        toMainGUI.put([2, f"[讀取圖片] 讀取 {os.path.basename(path)} 失敗\n{e}"])
+        return None
+    
+    img.convert('RGBA')
+    # 如果要求 cv2 形式，先確保是 RGB，再轉 BGR numpy array
+    if ReCv2:
+        arr = np.array(img, dtype=np.uint8)
+        arr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGRA)
+        return arr
+    else:
+        # 否則直接回傳 PIL Image
+        return img
+        
+def save_img(img,folderPath,basename,Exif=None):
+        save_path = None
+        if Exif is None:
+            Exif = b""
+    #try:
         # 判斷如果 img 為 numpy 陣列，則認為它來自 cv2
         if isinstance(img, np.ndarray):
             # 檢查是否為彩色圖像（3 通道）；OpenCV 讀取的彩色圖預設是 BGR 順序
@@ -59,23 +86,32 @@ def save_img(img,folderPath,basename):
         
         path = os.path.join(folderPath, basename)
         # 根據全域變數 format 保存檔案
-        fmt = format.lower()
-        if fmt == "heic":
-            # 若要保存 HEIC 格式，需 pillow-heif 模組支援（pip install pillow-heif）
-            save_path = path + ".heic"
+        fmt = format.upper()
+        if fmt == "HEIF" or fmt == "AVIF":
+            exif_dict = piexif.load(Exif) if Exif else {"Exif": {}}
+            exif_dict["Exif"][piexif.ExifIFD.ColorSpace] = 65535  # Uncalibrated
+            Exif = piexif.dump(exif_dict)
+            with open("heic_fix.icc", "rb") as f:
+                icc_bytes = b""#f.read()
+            save_path = path + f"_{fmt}.heic"
             # PIL 在保存 HEIC 時可能需要指定 format 與 quality 參數
-            img.save(save_path, format="HEIF", quality=quality , bit_depth=10)
-        elif fmt == "png":
+            img.save(save_path, format=fmt, quality=quality , exif=Exif,icc_profile=icc_bytes)
+        elif fmt == "PNG":
             save_path = path + ".png"
             img.save(save_path, format="PNG")
-        else:
+        elif fmt == "JPG":
             # 預設使用 JPEG 格式
             save_path = path + ".jpg"
             if img.mode == "RGBA":
                 img = img.convert("RGB")
-            img.save(save_path, format="JPEG", quality=quality)
-        
-        toMainGUI.put([0, f"[儲存圖片] 已保存: {save_path}"])
-        return True
-    except:
-        return False
+            img.save(save_path, format="JPEG", quality=quality,exif=Exif)
+
+        if save_path is not None:
+            toMainGUI.put([0, f"[儲存圖片] 已保存: {save_path}"])
+            return True
+        else:
+            toMainGUI.put([0, f"[儲存圖片] 失敗: {save_path}"])
+            return False
+    #except Exception as e:
+    #    toMainGUI.put([0, f"[儲存圖片] 失敗\n{e}"])
+    #    return False
