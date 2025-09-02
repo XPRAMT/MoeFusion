@@ -290,7 +290,7 @@ class ImageStitcher(QtCore.QObject):
             Waifu2x.scale = scale_factor
             Waifu2x.isReturnImg = True
             img = Waifu2x.run()
-        elif 5 > scale_factor > 0:
+        elif 8 > scale_factor > 0:
             self._log(f"[放大] {img['name']} 放大 {scale_factor:.2f} 倍")
             img = cv2.resize(img['raw'], None, fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_CUBIC)
         else:

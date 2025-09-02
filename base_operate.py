@@ -2,6 +2,7 @@ import os,time,io
 import cv2
 import numpy as np
 import utils
+import queue
 from waifu2x_vulkan import waifu2x
 from PyQt6 import QtWidgets, QtCore
 from waifu2x_Composite import waifu2xComposite
@@ -38,6 +39,14 @@ class BaseOperateWidget(QtWidgets.QWidget):
         self.brightSlider.valueChanged.connect(self._updateSettings)
         params_layout.addWidget(self.brightLabel)
         params_layout.addWidget(self.brightSlider)
+        #黑化
+        self.blackLabel = QtWidgets.QLabel("")
+        self.blackSlider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.blackSlider.setRange(0, 100)
+        self.blackSlider.setValue(0)
+        self.blackSlider.valueChanged.connect(self._updateSettings)
+        params_layout.addWidget(self.blackLabel)
+        params_layout.addWidget(self.blackSlider)
 
         # # #
         layout.addWidget(params_group)
@@ -58,6 +67,8 @@ class BaseOperateWidget(QtWidgets.QWidget):
         self.resizeLabel.setText(f'Resize: {resizeValue:.1f}')
         brightValue = self.brightSlider.value()/10
         self.brightLabel.setText(f'Brightness: {brightValue:.1f}')
+        blackValue = self.blackSlider.value()/100
+        self.blackLabel.setText(f'Black: {blackValue:.0%}')
 
     def run_processing(self):
         # 收集待處理圖片，並更新狀態
@@ -80,6 +91,7 @@ class BaseOperateWidget(QtWidgets.QWidget):
         self.BaseOperate.image_queue = self.image_queue
         self.BaseOperate.Scale = self.resizeSlider.value()/10
         self.BaseOperate.brightness = self.brightSlider.value()/10
+        self.BaseOperate.black = self.blackSlider.value()/100
         
         self.thread = QtCore.QThread()
         self.BaseOperate.moveToThread(self.thread)
@@ -109,7 +121,8 @@ class BaseOperateWidget(QtWidgets.QWidget):
     def save_parameters(self):
         params = {
             "resize": self.resizeSlider.value()/10,
-            "brightness": self.brightSlider.value()/10
+            "brightness": self.brightSlider.value()/10,
+            "black": self.blackSlider.value()/100
         }
         config_data = utils.config_file()
         config_data["BaseOperate"] = params
@@ -122,6 +135,7 @@ class BaseOperateWidget(QtWidgets.QWidget):
         if params:
             self.resizeSlider.setValue(int(params.get("resize", 1)*10))
             self.brightSlider.setValue(int(params.get("brightness", 1)*10))
+            self.blackSlider.setValue(int(params.get("black", 1)*100))
             utils.toMainGUI.put([0,"[parameters] Base operate loaded."])
         else:
             utils.toMainGUI.put([0,"[parameters] Not found base operate."])
@@ -137,6 +151,7 @@ class BaseOperate(QtCore.QObject):
         self.image_queue = None
         self.Scale = 1
         self.brightness = 1
+        self.black = 0
 
     def _log(self, msg):
         if utils.debug:
@@ -166,6 +181,9 @@ class BaseOperate(QtCore.QObject):
                 if self.brightness != 1:
                     img = self._brightness(img)
                     fixName += f'_Bright{self.brightness}'
+                if self.black != 0:
+                    img = self._black(img)
+                    fixName += f'_Black{self.black}'
 
                 if utils.outputFolder != "":
                     folderPath = utils.outputFolder
@@ -176,7 +194,7 @@ class BaseOperate(QtCore.QObject):
                     folderPath = current_folder
                 
                 
-                if not utils.save_img(img,folderPath,fixName,Exif):
+                if not utils.save_img(img,folderPath,fixName,img_path):
                     state_code = 3
             else:
                 state_code = 3
@@ -189,6 +207,7 @@ class BaseOperate(QtCore.QObject):
 
     def _resize(self,img):
         if img is not None and self.Scale != 1 and 0 < self.Scale < 6:
+            utils.toMainGUI.put([0,"[base] 縮放圖片"])
             # 取得原始大小
             w, h = img.size
             # 計算新的尺寸，並轉成整數
@@ -204,7 +223,7 @@ class BaseOperate(QtCore.QObject):
         
     def _brightness(self,img):
         if img is not None and self.brightness !=1 and 0 < self.brightness < 6:
-            
+            utils.toMainGUI.put([0,"[base] 調整亮度"])
             enhancer = ImageEnhance.Brightness(img)
             brightness_factor = self.brightness  # 例如增加到 150% 的亮度
             img_enhanced = enhancer.enhance(brightness_factor)
@@ -212,3 +231,74 @@ class BaseOperate(QtCore.QObject):
             return img_enhanced
         else:
             return None
+        
+
+    def _black(self, img: Image.Image) -> Image.Image | None:
+        if not isinstance(img, Image.Image):
+            return None
+
+        threshold = self.black * 255  # 類似色差容忍度（建議 self.black ∈ [0,1]）
+        if not (0 < threshold <= 255):
+            return None
+
+        utils.toMainGUI.put([0, "[base] 黑化"])
+
+        # 轉 PIL → OpenCV 格式 (BGR)
+        img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+        h, w = img_cv.shape[:2]
+
+        # Step 2️⃣：floodFill 初始化
+        mask = np.zeros((h + 2, w + 2), dtype=np.uint8)
+        lo_diff = (threshold, threshold, threshold)
+        up_diff = (threshold, threshold, threshold)
+        fill_color = (0, 0, 0)  # 黑色
+        flags = 8 | cv2.FLOODFILL_FIXED_RANGE | cv2.FLOODFILL_MASK_ONLY
+
+        # floodFill 起點（左側和右側共 20+20 個）
+        intervaly = max(1, h // 20)
+        start_points = []
+
+        for i in range(30):
+            y = i * intervaly
+            if y >= h:
+                y = h - 1
+
+            # 最左邊 x=0
+            start_points.append((0, y))
+            cv2.floodFill(img_cv, mask, seedPoint=(0, y),
+                        newVal=fill_color,
+                        loDiff=lo_diff,
+                        upDiff=up_diff,
+                        flags=flags)
+
+            # 最右邊 x=w-1
+            start_points.append((w - 1, y))
+            cv2.floodFill(img_cv, mask, seedPoint=(w - 1, y),
+                        newVal=fill_color,
+                        loDiff=lo_diff,
+                        upDiff=up_diff,
+                        flags=flags)
+
+        # Step 3️⃣：根據 mask 黑化區域（mask == 1）
+        mask_crop = mask[1:h+1, 1:w+1]
+        img_cv[mask_crop == 1] = fill_color
+
+        black_height = int(h * 0.21)
+        fade_start = black_height
+        fade_end = int(h * 0.24)
+        fade_height = fade_end - fade_start
+
+        # Step 1️⃣：上方 23% 完全黑
+        img_cv[0:black_height, :] = (0, 0, 0)
+
+        # Step 2️⃣：23% ~ 25% 線性加深（漸層黑）
+        for i in range(fade_height):
+            y = fade_start + i
+            if y >= h:
+                break
+            alpha = i / fade_height  # 線性透明度 (1 → 0)
+            img_cv[y, :] = (img_cv[y, :] * alpha).astype(np.uint8)
+
+        # 回轉為 PIL
+        img_pil = Image.fromarray(cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB))
+        return img_pil

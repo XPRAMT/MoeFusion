@@ -5,8 +5,9 @@ from PIL import Image, ImageFilter
 import pillow_avif
 import pillow_heif
 pillow_heif.register_heif_opener()
+import exiftool
 import piexif
-
+import subprocess
 image_queue = {}
 fromeFolder = {}
 isRunning = False
@@ -60,10 +61,8 @@ def read_img(path, ReCv2=False):
         # 否則直接回傳 PIL Image
         return img
         
-def save_img(img,folderPath,basename,Exif=None):
+def save_img(img,folderPath,basename,RawImg=None):
         save_path = None
-        if Exif is None:
-            Exif = b""
     #try:
         # 判斷如果 img 為 numpy 陣列，則認為它來自 cv2
         if isinstance(img, np.ndarray):
@@ -87,15 +86,31 @@ def save_img(img,folderPath,basename,Exif=None):
         path = os.path.join(folderPath, basename)
         # 根據全域變數 format 保存檔案
         fmt = format.upper()
-        if fmt == "HEIF" or fmt == "AVIF":
-            exif_dict = piexif.load(Exif) if Exif else {"Exif": {}}
-            exif_dict["Exif"][piexif.ExifIFD.ColorSpace] = 65535  # Uncalibrated
-            Exif = piexif.dump(exif_dict)
-            with open("heic_fix.icc", "rb") as f:
-                icc_bytes = b""#f.read()
-            save_path = path + f"_{fmt}.heic"
-            # PIL 在保存 HEIC 時可能需要指定 format 與 quality 參數
-            img.save(save_path, format=fmt, quality=quality , exif=Exif,icc_profile=icc_bytes)
+        if fmt in ("HEIF", "AVIF"):
+            fmt = "heic" if fmt == "HEIF" else "avif"
+            tmp_path = "_tmp.png"
+            save_path = path + "." + fmt
+            toMainGUI.put([0, f"[儲存圖片] 保存暫存檔:{tmp_path}"])
+            img.save(tmp_path, format="PNG", quality_mode="lossless")
+            toMainGUI.put([0, f"[儲存圖片] 轉為{fmt}"])
+            w, h = img.size
+            thumb_w = min(w // 4, 512)
+            cmd = [
+                "libheif/heif-enc.exe",
+                tmp_path,
+                "-o", save_path,
+                "-q", str(quality),
+                "-t", str(thumb_w),
+                "--matrix_coefficients", "1",
+                "--colour_primaries", "1",
+                "--transfer_characteristic", "13",
+                "--full_range_flag", "1"
+            ]
+            print("執行命令:", cmd)
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            subprocess.run(cmd, check=True,startupinfo=startupinfo)
+            os.remove(tmp_path)
         elif fmt == "PNG":
             save_path = path + ".png"
             img.save(save_path, format="PNG")
@@ -104,9 +119,18 @@ def save_img(img,folderPath,basename,Exif=None):
             save_path = path + ".jpg"
             if img.mode == "RGBA":
                 img = img.convert("RGB")
-            img.save(save_path, format="JPEG", quality=quality,exif=Exif)
+            img.save(save_path, format="JPEG", quality=quality)
 
         if save_path is not None:
+            if RawImg is not None:
+                toMainGUI.put([0, f"[儲存圖片] 寫入EXIF"])
+                with exiftool.ExifTool(encoding='utf-8') as et:
+                    et.execute(
+                        b"-overwrite_original",
+                        b"-TagsFromFile",
+                        RawImg.encode("utf-8"),
+                        save_path.encode("utf-8")
+                    )
             toMainGUI.put([0, f"[儲存圖片] 已保存: {save_path}"])
             return True
         else:

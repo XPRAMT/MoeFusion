@@ -233,7 +233,7 @@ class waifu2xComposite(QtCore.QThread):
                 
                 basename = basename + f"_{self.scale}x,model {top_model},blur {self.blur_factor:.1f},range {self.input_range}"
 
-                utils.save_img(result_img,folderPath,basename)
+                utils.save_img(result_img,folderPath,basename,inputPath)
 
                 self.finished.emit(self.image_path, True)  # 成功
 

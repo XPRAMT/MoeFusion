@@ -193,7 +193,7 @@ class ColorTransfer(QtCore.QObject):
                 else:
                     folderPath = current_folder
                 
-                if not utils.save_img(result_img,folderPath,f'{basename}_fix',Exif):
+                if not utils.save_img(result_img,folderPath,f'{basename}_fix',img_path):
                     state_code = 3
             else:
                 state_code = 3

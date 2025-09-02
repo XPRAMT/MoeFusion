@@ -6,6 +6,7 @@ import waifu2x_Composite_GUI
 import stitch
 import color_transfer
 import base_operate
+import send2trash
 ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('xpramt.moefusion')
 
 class HandleReturnMessages(QtCore.QThread):
@@ -131,9 +132,12 @@ class MainWindow(QtWidgets.QWidget):
         self.btn_reset = QtWidgets.QPushButton("🔄")
         self.btn_reset.clicked.connect(self.reset_images)
         btn_layout2.addWidget(self.btn_reset)
-        self.btn_clear = QtWidgets.QPushButton("🗑️")
+        self.btn_clear = QtWidgets.QPushButton("❌")
         self.btn_clear.clicked.connect(self.clear_images)
         btn_layout2.addWidget(self.btn_clear)
+        self.btn_delete = QtWidgets.QPushButton("🗑️")
+        self.btn_delete.clicked.connect(self.delete_images)
+        btn_layout2.addWidget(self.btn_delete)
         left_layout.addLayout(btn_layout2)
         # 檔案清單
         self.table_files = QtWidgets.QTableWidget()
@@ -245,7 +249,7 @@ class MainWindow(QtWidgets.QWidget):
 
     def dropEvent(self, event):
         for url in event.mimeData().urls():
-            file_path = url.toLocalFile()
+            file_path = os.path.normpath(url.toLocalFile())
             if os.path.isfile(file_path) and file_path.lower().endswith((".jpg", ".jpeg", ".png", ".webp" ,".heic" ,".hif")):
                 if file_path not in utils.image_queue:
                     utils.image_queue[file_path] = 0
@@ -263,7 +267,7 @@ class MainWindow(QtWidgets.QWidget):
             valid_extensions = (".jpg", ".jpeg", ".png", ".webp" ,".heic" ,".hif")
             for file_name in os.listdir(folder):
                 if file_name.lower().endswith(valid_extensions):
-                    full_path = os.path.join(folder, file_name)
+                    full_path = os.path.normpath(os.path.join(folder, file_name))
                     if full_path not in utils.image_queue:
                         utils.image_queue[full_path] = 0
                         utils.fromeFolder[full_path] = 0
@@ -274,9 +278,10 @@ class MainWindow(QtWidgets.QWidget):
             self, "Select Images", "", "Image Files (*.jpg *.jpeg *.png *.webp *.heic *.hif)"
         )
         if files:
-            for file in files:
-                if file not in utils.image_queue:
-                    utils.image_queue[file] = 0
+            for full_path_raw in files:
+                full_path = os.path.normpath(full_path_raw)
+                if full_path not in utils.image_queue:
+                    utils.image_queue[full_path] = 0
             self.update_table()
 
     def show_context_menu(self, position):
@@ -291,13 +296,13 @@ class MainWindow(QtWidgets.QWidget):
                 selected_rows = [index.row()]
 
         menu = QtWidgets.QMenu()
-        
-        reset_action = menu.addAction("🔄")
         # 使用 lambda 傳入所選行列表
+        reset_action = menu.addAction("🔄")
         reset_action.triggered.connect(lambda: self.reset_rows(selected_rows))
-        
-        clear_action = menu.addAction("🗑️")
+        clear_action = menu.addAction("❌")
         clear_action.triggered.connect(lambda: self.clear_rows(selected_rows))
+        delete_action = menu.addAction("🗑️")
+        delete_action.triggered.connect(lambda: self.delete_rows(selected_rows))
         
         menu.setMaximumWidth(80)
         menu.exec(self.table_files.viewport().mapToGlobal(position))
@@ -321,6 +326,21 @@ class MainWindow(QtWidgets.QWidget):
                 del utils.fromeFolder[file_path]
         self.update_table()
 
+    def delete_rows(self, rows):
+        for row in rows:
+            file_item = self.table_files.item(row, 0)
+            file_path = file_item.data(QtCore.Qt.ItemDataRole.UserRole)
+            try:
+                normalized_path = os.path.normpath(file_path)
+                send2trash.send2trash(normalized_path)  # 移動檔案到回收桶
+                if file_path in utils.image_queue:
+                    del utils.image_queue[file_path]
+                if file_path in utils.fromeFolder:
+                    del utils.fromeFolder[file_path]
+                self.update_table()
+            except Exception as e:
+                print(f"無法刪除檔案 {file_path}: {e}")  # 捕捉例外並輸出錯誤（可替換為日誌記錄）
+            
     def reset_images(self):
         # 將所有圖片的狀態重設為 "0"（等待）
         for file_path in utils.image_queue:
@@ -333,6 +353,20 @@ class MainWindow(QtWidgets.QWidget):
         utils.fromeFolder = {}
         self.update_table()
 
+    def delete_images(self):
+        # 遍歷圖片佇列，將每個圖片檔案移動到系統資源回收桶
+        for file_path in list(utils.image_queue.keys()):  # 使用 list() 避免運行時修改字典
+            #try:
+                normalized_path = os.path.normpath(file_path)
+                send2trash.send2trash(normalized_path)  # 移動檔案到回收桶
+                # 清空圖片佇列和來源資料夾字典，重置狀態
+                utils.image_queue = {}
+                utils.fromeFolder = {}
+                # 更新表格顯示新的狀態
+                self.update_table()
+            #except Exception as e:
+            #    print(f"無法刪除檔案 {file_path}: {e}")  # 捕捉例外並輸出錯誤（可替換為日誌記錄）
+        
     def update_table(self):
         # 先清空表格內容
         self.table_files.setRowCount(0)
